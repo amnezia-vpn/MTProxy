@@ -1,7 +1,11 @@
 # Triggers:
-# - Push a git tag  → image tags: <tag> and latest (e.g. v1.2.3, latest)
-# - Push to main/master → image tags: latest (and version "latest")
+# - Push a git tag  → image tags: <tag> and latest
+# - Push to main/master → image tags: latest (version "latest")
 # - workflow_dispatch → optional version input or latest
+#
+# No credentials in this file: use Actions secrets for tokens. Set repository Variable
+# GCR_REGISTRY (Settings → Secrets and variables → Actions → Variables) to your Artifact
+# Registry host path, e.g. REGION-docker.pkg.dev/PROJECT/REPO — avoids committing GCP paths.
 
 name: Build
 
@@ -22,6 +26,10 @@ on:
         required: false
         default: ''
         type: string
+
+env:
+  GCR_REGISTRY: ${{ vars.GCR_REGISTRY }}
+  IMAGE_NAME: amneziavpn/mtproxy
 
 jobs:
   get-version:
@@ -55,10 +63,90 @@ jobs:
 
   build:
     needs: get-version
-    uses: amnezia-vpn/infra-cicd/.github/workflows/docker-build.yml@master
-    with:
-      app_name: mtproxy
-      version: ${{ needs.get-version.outputs.tag }}
-      push: ${{ needs.get-version.outputs.should_push == 'true' }}
-      tag_latest: true
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Login to Docker Hub
+        if: ${{ needs.get-version.outputs.should_push == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to Google Container Registry
+        if: ${{ needs.get-version.outputs.should_push == 'true' && vars.GCR_REGISTRY != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GCR_REGISTRY }}
+          username: _json_key
+          password: ${{ secrets.GCR_JSON_KEY }}
+
+      - name: Setup metadata for Docker Hub
+        uses: docker/metadata-action@v5
+        id: metadata_dockerhub
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ needs.get-version.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Setup metadata for GCR
+        if: ${{ vars.GCR_REGISTRY != '' }}
+        id: metadata_gcr
+        run: |
+          VERSION="${{ needs.get-version.outputs.tag }}"
+          TAGS="${{ env.GCR_REGISTRY }}/mtproxy:${VERSION},${{ env.GCR_REGISTRY }}/mtproxy:latest"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set cache scope
+        id: cache
+        run: echo "scope=${{ github.workflow }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push to Docker Hub
+        if: ${{ needs.get-version.outputs.should_push == 'true' }}
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata_dockerhub.outputs.tags }}
+          labels: ${{ steps.metadata_dockerhub.outputs.labels }}
+          cache-from: |
+            type=gha,scope=${{ steps.cache.outputs.scope }}-main
+            type=gha,scope=${{ steps.cache.outputs.scope }}-pr
+          cache-to: type=gha,scope=${{ steps.cache.outputs.scope }}-main,mode=min
+
+      - name: Build and push to GCR
+        if: ${{ needs.get-version.outputs.should_push == 'true' && vars.GCR_REGISTRY != '' }}
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata_gcr.outputs.tags }}
+          cache-from: |
+            type=gha,scope=${{ steps.cache.outputs.scope }}-main
+            type=gha,scope=${{ steps.cache.outputs.scope }}-pr
+          cache-to: type=gha,scope=${{ steps.cache.outputs.scope }}-main,mode=min
+
+      - name: Build only (no push)
+        if: ${{ needs.get-version.outputs.should_push != 'true' }}
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: .
+          push: false
+          cache-from: |
+            type=gha,scope=${{ steps.cache.outputs.scope }}-pr
+            type=gha,scope=${{ steps.cache.outputs.scope }}-main
+          cache-to: type=gha,scope=${{ steps.cache.outputs.scope }}-pr,mode=min
