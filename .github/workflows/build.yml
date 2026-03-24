@@ -1,0 +1,64 @@
+# Triggers:
+# - Push a git tag  → image tags: <tag> and latest (e.g. v1.2.3, latest)
+# - Push to main/master → image tags: latest (and version "latest")
+# - workflow_dispatch → optional version input or latest
+
+name: Build
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image tag (empty = latest)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      should_push: ${{ steps.version.outputs.should_push }}
+    steps:
+      - name: Set version tag
+        id: version
+        run: |
+          VERSION="latest"
+          SHOULD_PUSH="false"
+
+          if [ "${{ github.event_name }}" == "push" ]; then
+            SHOULD_PUSH="true"
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              VERSION="${GITHUB_REF#refs/tags/}"
+            fi
+          fi
+
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            SHOULD_PUSH="true"
+            if [ -n "${{ inputs.version }}" ]; then
+              VERSION="${{ inputs.version }}"
+            fi
+          fi
+
+          echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "should_push=$SHOULD_PUSH" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: get-version
+    uses: amnezia-vpn/infra-cicd/.github/workflows/docker-build.yml@master
+    with:
+      app_name: mtproxy
+      version: ${{ needs.get-version.outputs.tag }}
+      push: ${{ needs.get-version.outputs.should_push == 'true' }}
+      tag_latest: true
+    secrets: inherit
