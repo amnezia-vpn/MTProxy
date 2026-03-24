@@ -1,11 +1,6 @@
 # Triggers:
-# - Push a git tag  → image tags: <tag> and latest
-# - Push to main/master → image tags: latest (version "latest")
-# - workflow_dispatch → optional version input or latest
-#
-# No credentials in this file: use Actions secrets for tokens. Set repository Variable
-# GCR_REGISTRY (Settings → Secrets and variables → Actions → Variables) to your Artifact
-# Registry host path, e.g. REGION-docker.pkg.dev/PROJECT/REPO — avoids committing GCP paths.
+# - Push a git tag → build and push image (<tag> and latest)
+# - workflow_dispatch → optional version input or latest (manual)
 
 name: Build
 
@@ -14,9 +9,6 @@ permissions:
 
 on:
   push:
-    branches:
-      - main
-      - master
     tags:
       - '*'
   workflow_dispatch:
@@ -44,11 +36,9 @@ jobs:
           VERSION="latest"
           SHOULD_PUSH="false"
 
-          if [ "${{ github.event_name }}" == "push" ]; then
+          if [ "${{ github.event_name }}" == "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
             SHOULD_PUSH="true"
-            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-              VERSION="${GITHUB_REF#refs/tags/}"
-            fi
+            VERSION="${GITHUB_REF#refs/tags/}"
           fi
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
