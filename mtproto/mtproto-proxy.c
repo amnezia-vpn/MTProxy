@@ -2118,6 +2118,13 @@ void mtfront_sigusr1_handler (void) {
   }
 }
 
+void mtfront_sighup_handler (void) {
+  do_reload_config (0x7);
+  if (workers) {
+    kill_children (SIGHUP);
+  }
+}
+
 /*
  *
  *		MAIN
@@ -2369,5 +2376,6 @@ int main (int argc, char *argv[]) {
   mtproto_front_functions.allowed_signals |= SIG2INT (SIGCHLD);
   mtproto_front_functions.signal_handlers[SIGCHLD] = on_child_termination;
   mtproto_front_functions.signal_handlers[SIGUSR1] = mtfront_sigusr1_handler;
+  mtproto_front_functions.signal_handlers[SIGHUP] = mtfront_sighup_handler;
   return default_main (&mtproto_front_functions, argc, argv);
 }
